@@ -26,7 +26,8 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-vms_db}?schema=public
       - DIRECT_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-vms_db}?schema=public
       - PORT=5000
-      # Add other required environment variables for your backend here (like JWT_SECRET, RESEND_API_KEY, etc.)
+      - JWT_SECRET=${JWT_SECRET:-my_super_secret_fallback_key}
+      - RESEND_API_KEY=${RESEND_API_KEY}
     ports:
       - "5000:5000"
     depends_on:
