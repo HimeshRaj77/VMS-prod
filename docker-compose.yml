@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-vms_db}
     ports:
-      - "5433:5432"
+      - "5439:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -31,8 +31,8 @@ services:
       - "5000:5000"
     depends_on:
       - db
-    # We use a command to ensure Prisma migrations run before starting the server
-    command: sh -c "npx prisma migrate deploy && npm start"
+    # We use db push to sync the schema directly since there are no migration files
+    command: sh -c "npx prisma db push && npm start"
     networks:
       - vms_network
 
