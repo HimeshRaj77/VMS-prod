@@ -1,0 +1,14 @@
+{
+  "id": "ba8ea03f-bd8b-4941-925e-856d79087a90",
+  "name": "/Volumes/MacOS/VMS/vendor-management-python-service",
+  "projectResources": {
+    "resources": [
+      {
+        "gitFolder": {
+          "folderUri": "file:///Volumes/MacOS/VMS/vendor-management-python-service",
+          "allowWrite": true
+        }
+      }
+    ]
+  }
+}

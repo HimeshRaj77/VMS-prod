@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+pdfplumber
+pydantic
+python-multipart
+openai
+instructor
+tiktoken
+PyMuPDF
+python-dotenv
+tenacity
+rapidfuzz
+extend-ai
+pandas
+openpyxl

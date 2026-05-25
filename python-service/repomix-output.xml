@@ -1,0 +1,1165 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+app/
+  ai/
+    normalization.py
+    openai_client.py
+    prompts.py
+    quotation_extractor.py
+    schemas.py
+    token_tracker.py
+    validators.py
+  routes/
+    __init__.py
+    extract.py
+  schemas/
+    extract.py
+  services/
+    pdf_extractor.py
+  __init__.py
+  main.py
+.gitignore
+requirements.txt
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="app/ai/normalization.py">
+import re
+from typing import Optional, Tuple
+
+def normalize_currency(val) -> Optional[int]:
+    """
+    Cleans currency strings (e.g. '₹77,82,150.00', '₹ 1,350', '45,000 INR')
+    and returns a clean, schema-safe integer.
+    """
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return int(val)
+        
+    s = str(val).strip()
+    if not s:
+        return None
+
+    # Handle decimals (e.g. '.00') safely
+    if '.' in s:
+        parts = s.split('.')
+        # If the decimal part is purely fractional, we keep the main part
+        s = parts[0]
+
+    # Strip everything except digits
+    cleaned = re.sub(r'[^\d]', '', s)
+    if cleaned:
+        try:
+            return int(cleaned)
+        except ValueError:
+            return None
+    return None
+
+def parse_manpower_pattern(text: str) -> Tuple[Optional[int], Optional[int]]:
+    """
+    Attempts to parse expressions like '123 Staff x 14 Days' or '15 Guards x 3 Days'
+    and returns a tuple of (manpower_count, duration_days).
+    """
+    if not text:
+        return None, None
+        
+    # Match pattern: {count} {Type} x {days} Days
+    pattern = r'(\d+)\s*[a-zA-Z\s]*\s*[xX*]\s*(\d+)\s*(?:Days|Day|days|day)?'
+    match = re.search(pattern, text, re.IGNORECASE)
+    if match:
+        try:
+            count = int(match.group(1))
+            days = int(match.group(2))
+            return count, days
+        except (ValueError, IndexError):
+            pass
+            
+    return None, None
+</file>
+
+<file path="app/ai/openai_client.py">
+import os
+import instructor
+from openai import OpenAI
+
+client = None
+
+def get_instructor_client():
+    """
+    Initializes and returns the Instructor-wrapped OpenAI client.
+    Ensures environment variables are fetched dynamically at request time.
+    """
+    global client
+    
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable is missing. Please configure it in your environment.")
+    
+    # Initialize a fresh client each time to avoid caching issues
+    openai_client = OpenAI(api_key=api_key)
+    client = instructor.from_openai(openai_client)
+    return client
+</file>
+
+<file path="app/ai/prompts.py">
+SYSTEM_PROMPT = """
+You are an elite procurement, commercial finance, and quotation intelligence extraction engine specializing in manpower and event quotations.
+
+Your ONLY responsibility is to convert raw quotation text into STRICT, FINANCIALLY ACCURATE, SCHEMA-SAFE structured JSON.
+
+You are NOT a chatbot.
+You are NOT an analyst.
+You are a deterministic extraction engine.
+
+===========================================================
+CRITICAL EXTRACTION PRIORITY RULES
+===========================================================
+
+The MOST IMPORTANT requirement is FINANCIAL PRECISION.
+
+Quotation documents often contain MULTIPLE totals:
+- Before GST totals
+- Inclusive GST totals
+- Tax-inclusive summaries
+- Service subtotals
+- Rounded totals
+- Advance amounts
+
+You MUST correctly identify and map EACH financial field.
+
+===========================================================
+GRAND TOTAL EXTRACTION RULES
+===========================================================
+
+VERY IMPORTANT:
+
+For:
+grand_total_before_gst
+
+ONLY extract values explicitly labeled as:
+- Grand Total (Before GST)
+- Grand Total Before GST
+- Total Before GST
+- Grand Total Excluding GST
+- Grand Total (Excluding GST)
+- Subtotal Before GST
+- Total Excl. GST
+- Commercial Summary Total Before GST
+
+NEVER extract:
+- INCL GST values
+- Inclusive GST values
+- Final payable amounts
+- Rounded totals
+- Tax-inclusive totals
+
+===========================================================
+FINAL TOTAL AFTER GST RULES
+===========================================================
+
+For:
+final_total_after_gst
+
+ONLY extract values explicitly labeled as:
+- Grand Total (Incl. GST)
+- Grand Total Including GST
+- Final Total
+- Total After GST
+- Amount Payable
+- Net Payable
+- Grand Total With GST
+
+===========================================================
+VERY IMPORTANT NEGATIVE RULES
+===========================================================
+
+If a value is labeled:
+- INCL GST
+- INCLUDING GST
+- WITH GST
+- GST INCLUDED
+
+NEVER use it for:
+grand_total_before_gst
+
+===========================================================
+FINANCIAL FIELD PRIORITY ORDER
+===========================================================
+
+Priority order:
+
+1. Explicit "Before GST" totals
+2. Explicit "Excluding GST" totals
+3. Explicit subtotal sections
+4. Commercial summary totals
+
+ONLY IF none exist:
+- return null
+
+NEVER infer totals mathematically.
+
+===========================================================
+STRICT CURRENCY EXTRACTION RULES
+===========================================================
+
+Normalize ALL currency values.
+
+Examples:
+
+₹77,82,150
+becomes:
+7782150
+
+₹17,22,000
+becomes:
+1722000
+
+₹60,60,150
+becomes:
+6060150
+
+Rules:
+- remove ₹ symbol
+- remove commas
+- return integers only
+- NEVER return formatted strings
+
+===========================================================
+SERVICE EXTRACTION RULES
+===========================================================
+
+Each major commercial/service heading MUST become its own service object.
+
+Examples:
+- Washroom Management Services
+- Housekeeping Services
+- Supervisory Support
+
+Each must contain:
+- service_name
+- manpower_count
+- subtotal_amount
+- duration_days
+- rate_per_manpower
+- responsibilities
+- remarks
+
+===========================================================
+COMMERCIAL SUMMARY EXTRACTION
+===========================================================
+
+Commercial Summary tables are HIGH PRIORITY.
+
+If a table contains:
+
+| Service | Amount |
+
+Extract EACH row as:
+- separate service object
+- preserve exact subtotal
+
+Example:
+
+Washroom Management Services → 1722000
+Housekeeping Services → 6060150
+
+===========================================================
+GST EXTRACTION RULES
+===========================================================
+
+Extract:
+- gst_percentage
+- gst_amount
+- gst_included
+
+If document says:
+"18% GST Extra As Applicable"
+
+Then:
+- gst_percentage = 18
+- gst_included = false
+
+If document says:
+"Including GST"
+
+Then:
+- gst_included = true
+
+===========================================================
+ZERO HALLUCINATION POLICY
+===========================================================
+
+STRICTLY PROHIBITED:
+- estimating totals
+- adding numbers mathematically
+- combining service subtotals
+- inferring manpower
+- guessing service durations
+- inventing payment terms
+
+If a field is unavailable:
+- return null
+- return []
+
+===========================================================
+OPERATIONAL HIERARCHY RULES
+===========================================================
+
+Preserve quotation hierarchy:
+
+Quotation
+  ↓
+Services
+  ↓
+Commercial Summary
+  ↓
+Payment Terms
+  ↓
+Risks
+  ↓
+Responsibilities
+
+===========================================================
+STRICT OUTPUT RULES
+===========================================================
+
+Return ONLY valid JSON.
+
+DO NOT:
+- explain
+- summarize
+- comment
+- analyze
+- add markdown
+
+===========================================================
+IMPORTANT EXTRACTION BEHAVIOR
+===========================================================
+
+If BOTH exist:
+
+Grand Total (Before GST)
+₹77,82,150
+
+AND
+
+Grand Total (Incl. GST)
+₹91,82,937
+
+Then:
+
+grand_total_before_gst = 7782150
+
+final_total_after_gst = 9182937
+
+NEVER swap them.
+
+===========================================================
+EXTRACTION MINDSET
+===========================================================
+
+You are functioning as:
+- a procurement ERP extraction engine
+- a quotation intelligence parser
+- a financial document structuring system
+
+NOT a conversational AI.
+"""
+</file>
+
+<file path="app/ai/quotation_extractor.py">
+import re
+import time
+import logging
+from typing import Dict, Any, List
+from app.ai.schemas import StructuredQuotationResponse
+from app.ai.openai_client import get_instructor_client
+from app.ai.prompts import SYSTEM_PROMPT
+from app.ai.validators import validate_and_heal_quotation
+from app.ai.normalization import normalize_currency, parse_manpower_pattern
+from app.ai.token_tracker import TokenTracker
+
+logger = logging.getLogger("quotation_extractor")
+logging.basicConfig(level=logging.INFO)
+
+# Initialize token tracker
+token_tracker = TokenTracker()
+
+def clean_extracted_text(text: str) -> str:
+    """
+    Cleans raw PDF text: removes noisy bullet symbols, normalizes multiple
+    newlines/spaces, and maintains a clean stream.
+    """
+    if not text:
+        return ""
+    
+    # Remove odd control characters and noisy bullet marks
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\xff]', '', text)
+    text = re.sub(r'[•▪♦★•●■+-]\s*', ' ', text)
+    
+    # Normalize double linebreaks and spacing
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    
+    return text.strip()
+
+def extract_structured_quotation(raw_extracted_json: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Primary processing engine: merges pages, cleans text, calls GPT-4o-mini
+    via Instructor, post-processes currencies, runs mathematical validation, and returns metadata.
+    """
+    start_time = time.time()
+    
+    # 1. Merge pages and apply cleaning
+    pages = raw_extracted_json.get("pages", [])
+    merged_text_parts = []
+    
+    for p in pages:
+        p_num = p.get("page_number", 1)
+        p_content = p.get("content", "")
+        cleaned_content = clean_extracted_text(p_content)
+        if cleaned_content:
+            merged_text_parts.append(f"--- PAGE {p_num} ---\n{cleaned_content}")
+            
+    full_text = "\n\n".join(merged_text_parts)
+    source_file = raw_extracted_json.get("metadata", {}).get("source_file", "unknown_source.pdf")
+    
+    if not full_text:
+        raise ValueError("No readable text content found in the raw extracted JSON.")
+
+    logger.info(f"Initiating structured extraction for: {source_file} ({len(full_text)} chars)")
+    
+    # 2. Get Instructor Client
+    client = get_instructor_client()
+    
+    # 3. Call OpenAI model
+    openai_start = time.time()
+    try:
+        # Request Instructor Structured response
+        structured_res: StructuredQuotationResponse = client.chat.completions.create(
+            model="gpt-4o-mini",
+            response_model=StructuredQuotationResponse,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"Here is the raw extracted text of the quotation '{source_file}':\n\n{full_text}"}
+            ],
+            temperature=0.1
+        )
+        
+        # Log token usage
+        if hasattr(structured_res, '_client_response'):
+            usage = structured_res._client_response.usage
+            token_tracker.log_request(
+                model="gpt-4o-mini",
+                input_tokens=usage.prompt_tokens,
+                output_tokens=usage.completion_tokens,
+                quotation_id=None,
+                source_file=source_file
+            )
+    except Exception as e:
+        logger.error(f"OpenAI GPT structured extraction failed: {str(e)}")
+        raise e
+        
+    openai_latency = time.time() - openai_start
+    logger.info(f"OpenAI raw response received in {openai_latency:.2f} seconds")
+
+    # 4. Currency and numeric field normalization
+    # Normalize general quotation fields
+    q = structured_res.quotation
+    q.source_file_name = source_file
+    q.grand_total_before_gst = normalize_currency(q.grand_total_before_gst)
+    q.gst_amount = normalize_currency(q.gst_amount)
+    q.final_total_after_gst = normalize_currency(q.final_total_after_gst)
+
+    # Normalize service specific fields
+    for s in structured_res.services:
+        s.rate_per_manpower = normalize_currency(s.rate_per_manpower)
+        s.subtotal_amount = normalize_currency(s.subtotal_amount)
+        
+        # If duration or manpower counts are missing, try to parse from descriptive fields
+        if not s.manpower_count or not s.duration_days:
+            parsed_count, parsed_days = parse_manpower_pattern(s.quantity_description)
+            if parsed_count and not s.manpower_count:
+                logger.info(f"Parsed manpower_count {parsed_count} from description: {s.quantity_description}")
+                s.manpower_count = parsed_count
+            if parsed_days and not s.duration_days:
+                logger.info(f"Parsed duration_days {parsed_days} from description: {s.quantity_description}")
+                s.duration_days = parsed_days
+
+    # 5. Execute Mathematical Validation & Healing
+    healed_response = validate_and_heal_quotation(structured_res)
+    
+    total_latency = time.time() - start_time
+    logger.info(f"Total structured extraction completed successfully in {total_latency:.2f}s")
+    
+    # 6. Build the final enterprise return JSON with performance metrics
+    return {
+        "success": True,
+        "structured_data": healed_response.model_dump(),
+        "performance": {
+            "total_latency_seconds": round(total_latency, 3),
+            "openai_latency_seconds": round(openai_latency, 3),
+            "character_count": len(full_text)
+        }
+    }
+</file>
+
+<file path="app/ai/schemas.py">
+from pydantic import BaseModel, Field
+from typing import List, Optional
+
+class Quotation(BaseModel):
+    quotation_id: Optional[str] = Field(None, description="Unique reference number or ID of the quotation document itself")
+    source_file_name: Optional[str] = Field(None, description="The name of the PDF file being extracted")
+    vendor_company: Optional[str] = Field(None, description="Name of the service provider or vendor organization sending the quotation")
+    event_name: Optional[str] = Field(None, description="The name of the event or project this quotation is generated for")
+    quotation_type: Optional[str] = Field(None, description="Type of services quoted, e.g. Housekeeping, Security, Production, Catering")
+    event_location: Optional[str] = Field(None, description="Venue or location details where services will be rendered")
+    contact_person: Optional[str] = Field(None, description="Primary representative or contact person name from the vendor side")
+    contact_email: Optional[str] = Field(None, description="Official email address of the contact person or vendor")
+    contact_phone: Optional[str] = Field(None, description="Official contact phone/mobile number")
+    grand_total_before_gst: Optional[int] = Field(None, description="Grand total amount excluding all taxes/GST")
+    gst_percentage: Optional[int] = Field(None, description="Standard GST or tax rate applied, usually as a percentage")
+    gst_amount: Optional[int] = Field(None, description="Calculated tax amount applied to the services")
+    final_total_after_gst: Optional[int] = Field(None, description="Absolute total billing amount including GST")
+    gst_included: Optional[bool] = Field(None, description="Whether the quoted prices explicitly include GST/taxes")
+    quotation_validity_days: Optional[int] = Field(None, description="Number of days the quotation prices remain valid for acceptance")
+    total_services: Optional[int] = Field(None, description="Count of distinct departments or core services outlined in the quotation")
+    total_manpower: Optional[int] = Field(None, description="Sum of all personnel/manpower headcount requested across all departments")
+    quotation_summary: Optional[str] = Field(None, description="Brief enterprise executive summary of the entire quotation scope")
+    operational_notes: List[str] = Field(default_factory=list, description="General operational timelines, execution conditions, and constraints")
+    client_obligations: List[str] = Field(default_factory=list, description="Explicit duties, resources, or provisions the client must supply")
+    financial_risks: List[str] = Field(default_factory=list, description="Commercial liabilities, extra charges, and payment penalties identified")
+    operational_risks: List[str] = Field(default_factory=list, description="Execution risks, shortage of staff, transport dependencies, and weather variables")
+    extraction_confidence: Optional[float] = Field(None, description="Calculated machine-learning confidence index for structured parsing")
+
+class QuotationService(BaseModel):
+    service_id: Optional[str] = Field(None, description="Unique index or key of the service department")
+    department_name: Optional[str] = Field(None, description="Standardized department/domain name, e.g. Housekeeping, Security, Stage Crew")
+    service_name: Optional[str] = Field(None, description="Specific title of the service package or line-item designation")
+    manpower_count: Optional[int] = Field(None, description="Number of personnel allocated for this specific service department")
+    manpower_type: Optional[str] = Field(None, description="Type/grade of staff allocated, e.g. Supervisor, Executive, Loader, Guard")
+    duration_days: Optional[int] = Field(None, description="Number of days this service/manpower is contracted for")
+    shifts_per_day: Optional[int] = Field(None, description="Number of distinct operational shifts run per 24 hours")
+    shift_timings: List[str] = Field(default_factory=list, description="Shift timings or slot brackets, e.g. 08:00-17:00, 20:00-05:00")
+    quantity_description: Optional[str] = Field(None, description="Textual description of quantity, unit, or operational scope")
+    rate_per_manpower: Optional[int] = Field(None, description="Commercial unit rate charged per staff per day or shift")
+    subtotal_amount: Optional[int] = Field(None, description="Subtotal amount for this specific service item (excluding tax)")
+    service_scope: List[str] = Field(default_factory=list, description="List of primary tasks, items, or requirements included in this service")
+    equipment_included: List[str] = Field(default_factory=list, description="List of vendor machines, toolsets, or equipment supplied")
+    service_responsibilities: List[str] = Field(default_factory=list, description="Standard operating duties and key performance responsibilities")
+    remarks: Optional[str] = Field(None, description="Any specific notes or exclusions related to this department service")
+
+class PaymentTerm(BaseModel):
+    stage_name: str = Field(..., description="Milestone phase title, e.g. Advance Payment, Post-Event Settlement")
+    percentage: int = Field(..., description="Percentage of the absolute total billing due in this phase, e.g. 50")
+
+class StructuredQuotationResponse(BaseModel):
+    quotation: Quotation
+    services: List[QuotationService]
+    payment_terms: List[PaymentTerm]
+</file>
+
+<file path="app/ai/token_tracker.py">
+import os
+import json
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Any, Optional
+from openai import OpenAI
+
+logger = logging.getLogger("token_tracker")
+logging.basicConfig(level=logging.INFO)
+
+# OpenAI Pricing (as of May 2026)
+# GPT-4o Mini pricing
+PRICING = {
+    "gpt-4o-mini": {
+        "input_per_1k_tokens": 0.00015,      # $0.15 per 1M input tokens
+        "output_per_1k_tokens": 0.0006,      # $0.60 per 1M output tokens
+    },
+    "gpt-4": {
+        "input_per_1k_tokens": 0.03,         # $30 per 1M input tokens
+        "output_per_1k_tokens": 0.06,        # $60 per 1M output tokens
+    }
+}
+
+# Track file path
+TRACKING_FILE = Path(__file__).parent / "token_usage.json"
+
+
+class TokenTracker:
+    """Tracks OpenAI token usage and costs for quota management."""
+    
+    def __init__(self, tracking_file: Path = TRACKING_FILE):
+        self.tracking_file = tracking_file
+        self.usage_data = self._load_usage()
+    
+    def _load_usage(self) -> Dict[str, Any]:
+        """Load existing usage data or create new."""
+        if self.tracking_file.exists():
+            try:
+                with open(self.tracking_file, 'r') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                logger.warning(f"Failed to load {self.tracking_file}, starting fresh")
+        
+        return {
+            "created_at": datetime.now().isoformat(),
+            "last_updated": datetime.now().isoformat(),
+            "requests": [],
+            "monthly_summary": {}
+        }
+    
+    def _save_usage(self):
+        """Persist usage data to file."""
+        self.usage_data["last_updated"] = datetime.now().isoformat()
+        try:
+            with open(self.tracking_file, 'w') as f:
+                json.dump(self.usage_data, f, indent=2)
+            logger.info(f"Usage data saved to {self.tracking_file}")
+        except IOError as e:
+            logger.error(f"Failed to save usage data: {e}")
+    
+    def log_request(self, model: str, input_tokens: int, output_tokens: int, 
+                    quotation_id: str = None, source_file: str = None):
+        """Log a single OpenAI API request."""
+        cost = self._calculate_cost(model, input_tokens, output_tokens)
+        request_data = {
+            "timestamp": datetime.now().isoformat(),
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+            "quotation_id": quotation_id,
+            "source_file": source_file,
+            "cost_usd": cost
+        }
+        
+        self.usage_data["requests"].append(request_data)
+        self._save_usage()
+        
+        # Color codes for pretty terminal logs
+        bold = '\033[1m'
+        cyan = '\033[96m'
+        yellow = '\033[93m'
+        green = '\033[92m'
+        end = '\033[0m'
+        
+        # Print a beautiful visual log card to the console stdout
+        print(f"\n{bold}{cyan}┌────────────────────────────────────────────────────────┐{end}")
+        print(f"{bold}{cyan}│             OPENAI KEY USED: COMPUTATION LOG           │{end}")
+        print(f"{bold}{cyan}├────────────────────────────────────────────────────────┤{end}")
+        print(f"│  {bold}Timestamp{end}: {request_data['timestamp'][:19].replace('T', ' '):<43}│")
+        print(f"│  {bold}Model{end}:     {model:<43}│")
+        if source_file:
+            print(f"│  {bold}File{end}:      {source_file[:43]:<43}│")
+        if quotation_id:
+            print(f"│  {bold}Quote ID{end}:  {quotation_id:<43}│")
+        print(f"{cyan}├────────────────────────────────────────────────────────┤{end}")
+        print(f"│  {bold}Input Tokens{end}:  {input_tokens:<12,}                               │")
+        print(f"│  {bold}Output Tokens{end}: {output_tokens:<12,}                               │")
+        print(f"│  {bold}Total Tokens{end}:  {yellow}{request_data['total_tokens']:<12,}{end}                               │")
+        print(f"{cyan}├────────────────────────────────────────────────────────┤{end}")
+        print(f"│  {bold}Usage Cost{end}:    {green}${cost:<11.6f}{end}USD                             │")
+        print(f"{bold}{cyan}└────────────────────────────────────────────────────────┘{end}\n")
+        
+        return request_data
+    
+    def _calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
+        """Calculate cost for a single request."""
+        if model not in PRICING:
+            logger.warning(f"Model {model} pricing not defined")
+            return 0.0
+        
+        pricing = PRICING[model]
+        input_cost = (input_tokens / 1000) * pricing["input_per_1k_tokens"]
+        output_cost = (output_tokens / 1000) * pricing["output_per_1k_tokens"]
+        
+        return round(input_cost + output_cost, 6)
+    
+    def get_daily_usage(self, date: Optional[str] = None) -> Dict[str, Any]:
+        """Get usage stats for a specific day (YYYY-MM-DD format, defaults to today)."""
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+        
+        daily_requests = [r for r in self.usage_data["requests"] 
+                         if r["timestamp"].startswith(date)]
+        
+        if not daily_requests:
+            return {"date": date, "requests": 0, "tokens": 0, "cost_usd": 0.0}
+        
+        total_requests = len(daily_requests)
+        total_tokens = sum(r["total_tokens"] for r in daily_requests)
+        total_cost = sum(r["cost_usd"] for r in daily_requests)
+        
+        return {
+            "date": date,
+            "requests": total_requests,
+            "input_tokens": sum(r["input_tokens"] for r in daily_requests),
+            "output_tokens": sum(r["output_tokens"] for r in daily_requests),
+            "total_tokens": total_tokens,
+            "cost_usd": round(total_cost, 4),
+            "requests_detail": daily_requests
+        }
+    
+    def get_monthly_usage(self, month: Optional[str] = None) -> Dict[str, Any]:
+        """Get usage stats for a specific month (YYYY-MM format, defaults to current month)."""
+        if month is None:
+            month = datetime.now().strftime("%Y-%m")
+        
+        monthly_requests = [r for r in self.usage_data["requests"] 
+                           if r["timestamp"].startswith(month)]
+        
+        if not monthly_requests:
+            return {"month": month, "requests": 0, "tokens": 0, "cost_usd": 0.0}
+        
+        total_requests = len(monthly_requests)
+        total_tokens = sum(r["total_tokens"] for r in monthly_requests)
+        total_cost = sum(r["cost_usd"] for r in monthly_requests)
+        
+        # Group by model
+        by_model = {}
+        for r in monthly_requests:
+            model = r["model"]
+            if model not in by_model:
+                by_model[model] = {
+                    "requests": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cost_usd": 0.0
+                }
+            by_model[model]["requests"] += 1
+            by_model[model]["input_tokens"] += r["input_tokens"]
+            by_model[model]["output_tokens"] += r["output_tokens"]
+            by_model[model]["cost_usd"] += r["cost_usd"]
+        
+        return {
+            "month": month,
+            "total_requests": total_requests,
+            "total_input_tokens": sum(r["input_tokens"] for r in monthly_requests),
+            "total_output_tokens": sum(r["output_tokens"] for r in monthly_requests),
+            "total_tokens": total_tokens,
+            "total_cost_usd": round(total_cost, 4),
+            "by_model": {model: {k: round(v, 4) if isinstance(v, float) else v 
+                                 for k, v in stats.items()}
+                        for model, stats in by_model.items()}
+        }
+    
+    def get_usage_summary(self) -> Dict[str, Any]:
+        """Get overall usage summary across all time."""
+        if not self.usage_data["requests"]:
+            return {
+                "total_requests": 0,
+                "total_tokens": 0,
+                "total_cost_usd": 0.0,
+                "earliest_request": None,
+                "latest_request": None
+            }
+        
+        total_requests = len(self.usage_data["requests"])
+        total_tokens = sum(r["total_tokens"] for r in self.usage_data["requests"])
+        total_cost = sum(r["cost_usd"] for r in self.usage_data["requests"])
+        
+        return {
+            "total_requests": total_requests,
+            "total_input_tokens": sum(r["input_tokens"] for r in self.usage_data["requests"]),
+            "total_output_tokens": sum(r["output_tokens"] for r in self.usage_data["requests"]),
+            "total_tokens": total_tokens,
+            "total_cost_usd": round(total_cost, 4),
+            "average_cost_per_request": round(total_cost / total_requests, 6) if total_requests > 0 else 0,
+            "average_tokens_per_request": round(total_tokens / total_requests, 0) if total_requests > 0 else 0,
+            "earliest_request": self.usage_data["requests"][0]["timestamp"] if self.usage_data["requests"] else None,
+            "latest_request": self.usage_data["requests"][-1]["timestamp"] if self.usage_data["requests"] else None
+        }
+    
+    def check_budget_remaining(self, monthly_budget_usd: float, month: Optional[str] = None) -> Dict[str, Any]:
+        """Check remaining budget for the month."""
+        monthly_stats = self.get_monthly_usage(month)
+        spent = monthly_stats["total_cost_usd"]
+        remaining = max(0, monthly_budget_usd - spent)
+        percentage_used = (spent / monthly_budget_usd * 100) if monthly_budget_usd > 0 else 0
+        
+        return {
+            "month": monthly_stats["month"],
+            "budget_usd": monthly_budget_usd,
+            "spent_usd": spent,
+            "remaining_usd": round(remaining, 4),
+            "percentage_used": round(percentage_used, 2),
+            "warning": percentage_used > 80,
+            "warning_message": f"Budget usage at {percentage_used:.2f}% - {round(remaining, 4)} remaining" 
+                              if percentage_used > 80 else None
+        }
+
+
+def integrate_with_openai_client(original_completion_func):
+    """Wrapper to automatically track tokens from OpenAI API responses."""
+    def wrapper(*args, **kwargs):
+        response = original_completion_func(*args, **kwargs)
+        
+        # Extract model and tokens from response
+        model = getattr(response, 'model', 'unknown')
+        usage = getattr(response, 'usage', None)
+        
+        if usage:
+            tracker = TokenTracker()
+            tracker.log_request(
+                model=model,
+                input_tokens=usage.prompt_tokens,
+                output_tokens=usage.completion_tokens
+            )
+        
+        return response
+    
+    return wrapper
+
+
+if __name__ == "__main__":
+    # Example usage
+    tracker = TokenTracker()
+    
+    # Simulate logging some requests
+    tracker.log_request("gpt-4o-mini", 2500, 1200, "Q-001", "quotation_1.pdf")
+    tracker.log_request("gpt-4o-mini", 3000, 1500, "Q-002", "quotation_2.pdf")
+    
+    print("\n=== Daily Usage ===")
+    print(json.dumps(tracker.get_daily_usage(), indent=2))
+    
+    print("\n=== Overall Summary ===")
+    print(json.dumps(tracker.get_usage_summary(), indent=2))
+    
+    print("\n=== Budget Check (Monthly budget: $50) ===")
+    print(json.dumps(tracker.check_budget_remaining(50.0), indent=2))
+</file>
+
+<file path="app/ai/validators.py">
+from typing import Dict, Any, List
+from app.ai.schemas import StructuredQuotationResponse
+import logging
+
+logger = logging.getLogger("quotation_validators")
+
+def validate_and_heal_quotation(res: StructuredQuotationResponse) -> StructuredQuotationResponse:
+    """
+    Validates mathematical relations within the structured quotation response and performs
+    deterministic healing to guarantee logical consistency.
+    """
+    q = res.quotation
+    services = res.services
+    payment_terms = res.payment_terms
+
+    # 1. Total Services Count Validation
+    q.total_services = len(services)
+
+    # 2. Total Manpower Aggregation
+    calculated_manpower = 0
+    for s in services:
+        if s.manpower_count:
+            calculated_manpower += s.manpower_count
+    
+    if not q.total_manpower or q.total_manpower != calculated_manpower:
+        if calculated_manpower > 0:
+            logger.info(f"Correcting total_manpower from {q.total_manpower} to calculated {calculated_manpower}")
+            q.total_manpower = calculated_manpower
+
+    # 3. Subtotals vs Grand Total Before GST
+    calculated_grand_subtotal = 0
+    for s in services:
+        # Calculate subtotal if count, rate, and duration are defined
+        if s.manpower_count and s.rate_per_manpower and s.duration_days:
+            expected_sub = s.manpower_count * s.rate_per_manpower * s.duration_days
+            if not s.subtotal_amount or s.subtotal_amount != expected_sub:
+                s.subtotal_amount = expected_sub
+        
+        if s.subtotal_amount:
+            calculated_grand_subtotal += s.subtotal_amount
+
+    if not q.grand_total_before_gst or q.grand_total_before_gst != calculated_grand_subtotal:
+        if calculated_grand_subtotal > 0:
+            logger.info(f"Healing grand_total_before_gst from {q.grand_total_before_gst} to calculated {calculated_grand_subtotal}")
+            q.grand_total_before_gst = calculated_grand_subtotal
+
+    # 4. GST Mathematics Healing
+    if q.grand_total_before_gst:
+        gst_pct = q.gst_percentage or 18 # Standard fallback
+        expected_gst_amount = int(q.grand_total_before_gst * (gst_pct / 100.0))
+        
+        if not q.gst_amount or abs(q.gst_amount - expected_gst_amount) > 10:
+            q.gst_amount = expected_gst_amount
+            q.gst_percentage = gst_pct
+
+        expected_final = q.grand_total_before_gst + q.gst_amount
+        if not q.final_total_after_gst or abs(q.final_total_after_gst - expected_final) > 10:
+            q.final_total_after_gst = expected_final
+
+    # 5. Payment Percentage Safety Check
+    pct_sum = sum(pt.percentage for pt in payment_terms)
+    if pct_sum > 0 and pct_sum != 100:
+        warning_msg = f"CRITICAL: Payment terms percentage sum ({pct_sum}%) does not equal 100%."
+        if warning_msg not in q.financial_risks:
+            q.financial_risks.append(warning_msg)
+
+    # 6. Default Confidence
+    if not q.extraction_confidence:
+        q.extraction_confidence = 0.95
+
+    return res
+</file>
+
+<file path="app/routes/__init__.py">
+from fastapi import APIRouter
+from . import extract
+
+# Re-exporting routers
+</file>
+
+<file path="app/routes/extract.py">
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+import logging
+from app.schemas.extract import ExtractRequest, ExtractResponse
+from app.services.pdf_extractor import extract_text_from_pdf
+from app.ai.quotation_extractor import extract_structured_quotation
+from app.ai.token_tracker import TokenTracker
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+router = APIRouter()
+token_tracker = TokenTracker()
+
+class StructuredRequest(BaseModel):
+    raw_data: dict
+
+class BudgetCheckRequest(BaseModel):
+    budget_usd: float
+    month: Optional[str] = None
+
+@router.post("/extract-text", response_model=ExtractResponse)
+async def extract_text_endpoint(request: ExtractRequest):
+    """
+    Receives a local absolute file path and returns the extracted text from the PDF.
+    """
+    try:
+        text = await extract_text_from_pdf(request.file_path)
+        return ExtractResponse(success=True, text=text)
+    except FileNotFoundError as e:
+        logger.error(f"File not found: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"PDF extraction error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"PDF extraction failed: {str(e)}")
+
+@router.post("/extract-structured-quotation")
+async def extract_structured_quotation_endpoint(request: StructuredRequest):
+    """
+    Receives raw extracted PDF JSON text, applies cleanups, invokes OpenAI GPT-4o-mini
+    via Instructor, post-processes currencies/manpower, and returns verified structured JSON.
+    """
+    try:
+        logger.info("Starting structured quotation extraction...")
+        result = extract_structured_quotation(request.raw_data)
+        logger.info("Structured extraction completed successfully")
+        return result
+    except ValueError as e:
+        logger.error(f"Validation error: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Validation error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Structured extraction error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Structured extraction failed: {str(e)}")
+
+
+@router.get("/token-usage/summary")
+async def get_token_usage_summary():
+    """Get overall OpenAI token usage summary."""
+    try:
+        summary = token_tracker.get_usage_summary()
+        return {"success": True, "data": summary}
+    except Exception as e:
+        logger.error(f"Error retrieving token summary: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving token summary: {str(e)}")
+
+
+@router.get("/token-usage/daily")
+async def get_daily_token_usage(date: Optional[str] = None):
+    """Get token usage for a specific day (YYYY-MM-DD, defaults to today)."""
+    try:
+        daily_usage = token_tracker.get_daily_usage(date)
+        return {"success": True, "data": daily_usage}
+    except Exception as e:
+        logger.error(f"Error retrieving daily token usage: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving daily token usage: {str(e)}")
+
+
+@router.get("/token-usage/monthly")
+async def get_monthly_token_usage(month: Optional[str] = None):
+    """Get token usage for a specific month (YYYY-MM, defaults to current month)."""
+    try:
+        monthly_usage = token_tracker.get_monthly_usage(month)
+        return {"success": True, "data": monthly_usage}
+    except Exception as e:
+        logger.error(f"Error retrieving monthly token usage: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving monthly token usage: {str(e)}")
+
+
+@router.post("/token-usage/check-budget")
+async def check_budget_remaining(request: BudgetCheckRequest):
+    """Check remaining budget for the month."""
+    try:
+        if request.budget_usd <= 0:
+            raise ValueError("Budget must be greater than 0")
+        
+        budget_status = token_tracker.check_budget_remaining(request.budget_usd, request.month)
+        return {"success": True, "data": budget_status}
+    except Exception as e:
+        logger.error(f"Error checking budget: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error checking budget: {str(e)}")
+</file>
+
+<file path="app/schemas/extract.py">
+from pydantic import BaseModel
+
+class ExtractRequest(BaseModel):
+    file_path: str
+
+class ExtractResponse(BaseModel):
+    success: bool
+    text: str
+    error: str | None = None
+</file>
+
+<file path="app/services/pdf_extractor.py">
+import fitz
+import os
+import json
+
+async def extract_text_from_pdf(file_path: str) -> str:
+    """
+    Extracts text from a given PDF file using PyMuPDF (fitz) and returns it in structured JSON format.
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found at path: {file_path}")
+
+    try:
+        # Open the PDF using PyMuPDF
+        doc = fitz.open(file_path)
+        
+        extracted_data = {
+            "metadata": {
+                "page_count": len(doc),
+                "source_file": os.path.basename(file_path)
+            },
+            "pages": []
+        }
+
+        for i, page in enumerate(doc):
+            # Extract text
+            text = page.get_text()
+            extracted_data["pages"].append({
+                "page_number": i + 1,
+                "content": text.strip() if text and text.strip() else None
+            })
+        
+        doc.close()
+        
+        # Return as a formatted JSON string
+        return json.dumps(extracted_data, indent=2)
+    except Exception as e:
+        raise Exception(f"Failed to extract text using PyMuPDF: {str(e)}")
+</file>
+
+<file path="app/__init__.py">
+# Empty init
+</file>
+
+<file path="app/main.py">
+import os
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.routes import extract
+
+# Load environment variables from .env file
+load_dotenv()
+
+app = FastAPI(title="PDF Extraction Service", version="1.0.0")
+
+# Allow CORS for local development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(extract.router)
+
+@app.get("/")
+async def root():
+    return {"message": "PDF Extraction Service is running"}
+</file>
+
+<file path=".gitignore">
+.env
+</file>
+
+<file path="requirements.txt">
+fastapi
+uvicorn
+pdfplumber
+pydantic
+python-multipart
+openai
+instructor
+tiktoken
+PyMuPDF
+python-dotenv
+</file>
+
+</files>
