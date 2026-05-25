@@ -26,8 +26,11 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-vms_db}?schema=public
       - DIRECT_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-vms_db}?schema=public
       - PORT=5000
+      - NODE_ENV=production
       - JWT_SECRET=${JWT_SECRET:-my_super_secret_fallback_key}
       - RESEND_API_KEY=${RESEND_API_KEY}
+      - PYTHON_SERVICE_URL=http://python-service:8000
+      - CLIENT_URL=${CLIENT_URL:-http://localhost:8080}
     ports:
       - "5000:5000"
     depends_on:
@@ -46,8 +49,8 @@ services:
     container_name: vms_python_service
     restart: always
     environment:
-      # Add required environment variables here (like OPENAI_API_KEY)
       - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     ports:
       - "8000:8000"
     volumes:
