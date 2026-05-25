@@ -2,6 +2,16 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const path = require('path');
+const fs = require('fs');
+
+// Ensure upload directories exist
+const uploadsDir = path.join(__dirname, 'uploads');
+const aadharDir = path.join(uploadsDir, 'aadhar');
+const rosterDir = path.join(uploadsDir, 'roster');
+
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+if (!fs.existsSync(aadharDir)) fs.mkdirSync(aadharDir, { recursive: true });
+if (!fs.existsSync(rosterDir)) fs.mkdirSync(rosterDir, { recursive: true });
 
 // Load environment variables
 dotenv.config();

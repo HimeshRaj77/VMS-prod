@@ -34,6 +34,8 @@ services:
       - db
     # We use db push to sync the schema directly since there are no migration files
     command: sh -c "npx prisma db push && npm start"
+    volumes:
+      - vms_uploads:/app/uploads
     networks:
       - vms_network
 
@@ -48,6 +50,8 @@ services:
       - PYTHONUNBUFFERED=1
     ports:
       - "8000:8000"
+    volumes:
+      - vms_uploads:/app/uploads
     networks:
       - vms_network
 
@@ -66,6 +70,7 @@ services:
 
 volumes:
   postgres_data:
+  vms_uploads:
 
 networks:
   vms_network:
