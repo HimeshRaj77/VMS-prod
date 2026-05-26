@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-vms_db}
     ports:
-      - "5439:5432"
+      - "5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -31,8 +31,15 @@ services:
       - RESEND_API_KEY=${RESEND_API_KEY}
       - PYTHON_SERVICE_URL=http://python-service:8000
       - CLIENT_URL=${CLIENT_URL:-http://localhost:8080}
-    ports:
-      - "5000:5000"
+    expose:
+      - "5000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vendor-api.rule=Host(`vendor.aelyx.ai`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.vendor-api.entrypoints=websecure"
+      - "traefik.http.routers.vendor-api.tls=true"
+      - "traefik.http.routers.vendor-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.vendor-api.loadbalancer.server.port=5000"
     depends_on:
       - db
     # We use db push to sync the schema directly since there are no migration files
@@ -42,21 +49,28 @@ services:
     networks:
       - vms_network
 
-  python-service:
-    build:
-      context: ./python-service
-      dockerfile: Dockerfile
-    container_name: vms_python_service
-    restart: always
-    environment:
-      - PYTHONUNBUFFERED=1
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    ports:
-      - "8000:8000"
-    volumes:
-      - vms_uploads:/app/uploads
-    networks:
-      - vms_network
+python-service:
+  build:
+    context: ./python-service
+    dockerfile: Dockerfile
+  container_name: vms_python_service
+  restart: always
+  environment:
+    - PYTHONUNBUFFERED=1
+    - OPENAI_API_KEY=${OPENAI_API_KEY}
+  expose:
+    - "8000"
+  labels:
+    - "traefik.enable=true"
+    - "traefik.http.routers.vendor-ocr.rule=Host(`vendor.aelyx.ai`) && PathPrefix(`/ocr`)"
+    - "traefik.http.routers.vendor-ocr.entrypoints=websecure"
+    - "traefik.http.routers.vendor-ocr.tls=true"
+    - "traefik.http.routers.vendor-ocr.tls.certresolver=letsencrypt"
+    - "traefik.http.services.vendor-ocr.loadbalancer.server.port=8000"
+  volumes:
+    - vms_uploads:/app/uploads
+  networks:
+    - vms_network
 
   frontend:
     build:
@@ -64,8 +78,15 @@ services:
       dockerfile: Dockerfile
     container_name: vms_frontend
     restart: always
-    ports:
-      - "8080:80"
+    expose:
+      - "80"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vendor.rule=Host(`vendor.aelyx.ai`)"
+      - "traefik.http.routers.vendor.entrypoints=websecure"
+      - "traefik.http.routers.vendor.tls=true"
+      - "traefik.http.routers.vendor.tls.certresolver=letsencrypt"
+      - "traefik.http.services.vendor.loadbalancer.server.port=80"
     depends_on:
       - backend
     networks:
@@ -78,3 +99,4 @@ volumes:
 networks:
   vms_network:
     driver: bridge
+ 
