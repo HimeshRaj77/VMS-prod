@@ -6,10 +6,10 @@ services:
     container_name: vms_db
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-vms_db}
-    ports:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    expose:
       - "5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -23,14 +23,15 @@ services:
     container_name: vms_backend
     restart: always
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-vms_db}?schema=public
-      - DIRECT_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-vms_db}?schema=public
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
+      - DIRECT_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
       - PORT=5000
       - NODE_ENV=production
-      - JWT_SECRET=${JWT_SECRET:-my_super_secret_fallback_key}
+      - JWT_SECRET=${JWT_SECRET}
       - RESEND_API_KEY=${RESEND_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - PYTHON_SERVICE_URL=http://python-service:8000
-      - CLIENT_URL=${CLIENT_URL:-http://localhost:8080}
+      - CLIENT_URL=${CLIENT_URL}
     expose:
       - "5000"
     labels:
@@ -42,7 +43,6 @@ services:
       - "traefik.http.services.vendor-api.loadbalancer.server.port=5000"
     depends_on:
       - db
-    # We use db push to sync the schema directly since there are no migration files
     command: sh -c "npx prisma db push && npm start"
     volumes:
       - vms_uploads:/app/uploads
@@ -50,27 +50,28 @@ services:
       - vms_network
 
   python-service:
-  build:
-    context: ./python-service
-    dockerfile: Dockerfile
-  container_name: vms_python_service
-  restart: always
-  environment:
-    - PYTHONUNBUFFERED=1
-    - OPENAI_API_KEY=${OPENAI_API_KEY}
-  expose:
-    - "8000"
-  labels:
-    - "traefik.enable=true"
-    - "traefik.http.routers.vendor-ocr.rule=Host(`vendor.aelyx.ai`) && PathPrefix(`/ocr`)"
-    - "traefik.http.routers.vendor-ocr.entrypoints=websecure"
-    - "traefik.http.routers.vendor-ocr.tls=true"
-    - "traefik.http.routers.vendor-ocr.tls.certresolver=letsencrypt"
-    - "traefik.http.services.vendor-ocr.loadbalancer.server.port=8000"
-  volumes:
-    - vms_uploads:/app/uploads
-  networks:
-    - vms_network
+    build:
+      context: ./python-service
+      dockerfile: Dockerfile
+    container_name: vms_python_service
+    restart: always
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EXTEND_API_KEY=${EXTEND_API_KEY}
+    expose:
+      - "8000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vendor-ocr.rule=Host(`vendor.aelyx.ai`) && PathPrefix(`/ocr`)"
+      - "traefik.http.routers.vendor-ocr.entrypoints=websecure"
+      - "traefik.http.routers.vendor-ocr.tls=true"
+      - "traefik.http.routers.vendor-ocr.tls.certresolver=letsencrypt"
+      - "traefik.http.services.vendor-ocr.loadbalancer.server.port=8000"
+    volumes:
+      - vms_uploads:/app/uploads
+    networks:
+      - vms_network
 
   frontend:
     build:
@@ -99,4 +100,3 @@ volumes:
 networks:
   vms_network:
     driver: bridge
- 
