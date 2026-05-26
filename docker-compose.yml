@@ -49,7 +49,7 @@ services:
     networks:
       - vms_network
 
-python-service:
+  python-service:
   build:
     context: ./python-service
     dockerfile: Dockerfile
